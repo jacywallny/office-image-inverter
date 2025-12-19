@@ -1,64 +1,85 @@
 Office.onReady((info) => {
+    // 1. 初始化：改变界面提示，告诉用户怎么用
     const btn = document.getElementById("runBtn");
-    if (btn) btn.onclick = runInvertByClipboard;
+    const status = document.getElementById("status");
+    const title = document.querySelector("h2"); // 假设你有h2标题
+    const desc = document.querySelector("p");   // 假设你有p标签说明
+
+    if (btn) {
+        // 既然不能自动读，就把按钮改成一个“状态指示器”
+        btn.innerText = "🖱️ 点我，然后按 Ctrl+V";
+        btn.onclick = () => {
+            updateStatus("👉 没错！请直接按下 Ctrl+V 粘贴图片");
+        };
+    }
+    
+    if (desc) desc.innerText = "第一步：在 PPT 复制图片 (Ctrl+C)\n第二步：点一下这里，按 Ctrl+V";
+    
+    // 2. 监听全局粘贴事件 (这是核心！无需权限即可触发)
+    document.addEventListener("paste", handlePaste);
 });
 
-// ✂️ 剪贴板模式主函数
-async function runInvertByClipboard() {
-    updateStatus("⏳ 正在读取剪贴板...");
+async function handlePaste(event) {
+    // 阻止默认粘贴行为（防止它试图把图贴到文字里）
+    event.preventDefault();
+    
+    updateStatus("⚡ 检测到粘贴！正在处理...");
+
+    // 1. 从粘贴事件中获取数据
+    const items = (event.clipboardData || event.originalEvent.clipboardData).items;
+    let blob = null;
+
+    // 2. 寻找图片
+    for (const item of items) {
+        if (item.type.indexOf("image") === 0) {
+            blob = item.getAsFile();
+            break;
+        }
+    }
+
+    if (!blob) {
+        updateStatus("❌ 你粘贴的不是图片！\n请先在 PPT 里选中图片复制。");
+        return;
+    }
 
     try {
-        // 1. 尝试从剪贴板读取内容
-        // 注意：浏览器通常需要用户授权（第一次会弹窗）
-        const clipboardItems = await navigator.clipboard.read();
+        // 3. 将 Blob 转为 Base64
+        const base64 = await blobToBase64(blob);
         
-        let foundImage = false;
+        updateStatus("🎨 正在进行反色计算...");
 
-        for (const item of clipboardItems) {
-            // 2. 寻找图片格式 (png/jpeg)
-            const imageType = item.types.find(type => type.startsWith("image/"));
-            
-            if (imageType) {
-                foundImage = true;
-                const blob = await item.getType(imageType);
-                
-                // 3. 将 Blob 转为 Base64 供我们处理
-                const base64 = await blobToBase64(blob);
-                
-                updateStatus("🎨 获取成功，正在反色...");
-                
-                // 4. 反色处理
-                const newBase64 = await invertImagePromise(base64);
-                
-                // 5. 将处理后的图片写回剪贴板
-                const newBlob = await base64ToBlob(newBase64);
-                
-                // 写入剪贴板 (这就相当于你已经复制了新图)
-                await navigator.clipboard.write([
-                    new ClipboardItem({ [imageType]: newBlob })
-                ]);
-                
-                updateStatus("✅ 成功！请按 Ctrl+V 粘贴");
-                return; // 处理完一张就退出
-            }
-        }
+        // 4. 反色处理
+        const newBase64 = await invertImagePromise(base64);
 
-        if (!foundImage) {
-            updateStatus("❌ 剪贴板里没有图片！\n请先选中图片按 Ctrl+C");
+        // 5. 将结果写回剪贴板
+        // 注意：写入剪贴板通常比读取要宽松，但为了保险，我们需要一个 Blob
+        const newBlob = await base64ToBlob(newBase64);
+        
+        await navigator.clipboard.write([
+            new ClipboardItem({ [blob.type]: newBlob })
+        ]);
+
+        updateStatus("✅ 成功！新图已复制。\n请回到 PPT 按 Ctrl+V");
+        
+        // 视觉反馈：让按钮变绿一下
+        const btn = document.getElementById("runBtn");
+        if(btn) {
+            const oldText = btn.innerText;
+            btn.style.backgroundColor = "#107c10";
+            btn.innerText = "完成！请粘贴";
+            setTimeout(() => {
+                btn.style.backgroundColor = ""; // 恢复颜色
+                btn.innerText = oldText;
+            }, 3000);
         }
 
     } catch (err) {
         console.error(err);
-        // 常见错误处理
-        if (err.name === 'NotAllowedError') {
-            updateStatus("❌ 权限被拒绝：请允许插件访问剪贴板");
-        } else {
-            updateStatus("⚠️ 错误: " + err.message + "\n请确保你先按了 Ctrl+C");
-        }
+        updateStatus("⚠️ 处理出错: " + err.message);
     }
 }
 
-// --- 辅助工具：Blob 转 Base64 ---
+// --- 辅助函数：Blob 转 Base64 ---
 function blobToBase64(blob) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -68,17 +89,16 @@ function blobToBase64(blob) {
     });
 }
 
-// --- 辅助工具：Base64 转 Blob ---
+// --- 辅助函数：Base64 转 Blob ---
 async function base64ToBlob(base64) {
     const res = await fetch(base64);
     return await res.blob();
 }
 
-// --- 图像处理核心算法 (不变) ---
+// --- 核心算法：反色 ---
 function invertImagePromise(base64Str) {
     return new Promise((resolve, reject) => {
         const img = new Image();
-        img.src = base64Str;
         img.onload = () => {
             const canvas = document.createElement('canvas');
             canvas.width = img.width;
@@ -87,6 +107,7 @@ function invertImagePromise(base64Str) {
             ctx.drawImage(img, 0, 0);
             const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
             const data = imageData.data;
+            // RGB 反色
             for (let i = 0; i < data.length; i += 4) {
                 data[i] = 255 - data[i];
                 data[i + 1] = 255 - data[i + 1];
@@ -95,18 +116,12 @@ function invertImagePromise(base64Str) {
             ctx.putImageData(imageData, 0, 0);
             resolve(canvas.toDataURL("image/png"));
         };
-        img.onerror = (e) => reject(e);
+        img.onerror = reject;
+        img.src = base64Str;
     });
 }
 
-function updateStatus(message) {
+function updateStatus(msg) {
     const el = document.getElementById("status");
-    if(el) el.innerText = message;
-    
-    // 如果你有美化版的 UI，这里适配一下颜色
-    if (message.includes("Ctrl+V")) {
-        if(el) el.style.color = "green";
-        const btnText = document.getElementById("btnText");
-        if(btnText) btnText.innerText = "已完成，请粘贴";
-    }
+    if (el) el.innerText = msg;
 }
