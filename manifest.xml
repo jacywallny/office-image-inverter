@@ -15,8 +15,9 @@
     <Host Name="Document" /> <Host Name="Presentation" /> </Hosts>
   
   <DefaultSettings>
-    <SourceLocation DefaultValue="http://127.0.0.1:5500/taskpane.html" />
+    <SourceLocation DefaultValue="https://jacywallny.github.io/office-image-inverter/" />
   </DefaultSettings>
   
   <Permissions>ReadWriteDocument</Permissions>
+
 </OfficeApp>
