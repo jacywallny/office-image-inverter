@@ -1,35 +1,76 @@
 Office.onReady((info) => {
-    // 1. 初始化：改变界面提示，告诉用户怎么用
+    // 1. 初始化界面文字
     const btn = document.getElementById("runBtn");
-    const status = document.getElementById("status");
-    const title = document.querySelector("h2"); // 假设你有h2标题
-    const desc = document.querySelector("p");   // 假设你有p标签说明
+    const desc = document.querySelector("p");
 
     if (btn) {
-        // 既然不能自动读，就把按钮改成一个“状态指示器”
         btn.innerText = "🖱️ 点我，然后按 Ctrl+V";
         btn.onclick = () => {
-            updateStatus("👉 没错！请直接按下 Ctrl+V 粘贴图片");
+            updateStatus("👉 没错！请直接按下 Ctrl+V 粘贴，或者把图片拖进来");
         };
     }
     
-    if (desc) desc.innerText = "第一步：在 PPT 复制图片 (Ctrl+C)\n第二步：点一下这里，按 Ctrl+V";
+    if (desc) desc.innerText = "方法一：复制图片 -> 点这里 -> 按 Ctrl+V\n方法二：直接把 PPT 里的图片拖进来";
     
-    // 2. 监听全局粘贴事件 (这是核心！无需权限即可触发)
+    // 2. 监听粘贴 (Ctrl+V)
     document.addEventListener("paste", handlePaste);
+
+    // ==========================================
+    // 🆕 新增功能：监听拖拽 (Drag & Drop)
+    // ==========================================
+    
+    // 当文件拖进插件区域时：变色提示
+    document.body.addEventListener("dragover", (e) => {
+        e.preventDefault(); // 必须加这行，允许拖入
+        document.body.style.backgroundColor = "#e6f2ff"; // 变成淡蓝色
+        updateStatus("✊ 松手即可处理图片");
+    });
+
+    // 当文件离开插件区域时：恢复颜色
+    document.body.addEventListener("dragleave", (e) => {
+        e.preventDefault();
+        document.body.style.backgroundColor = ""; // 恢复原色
+        updateStatus("等待图片...");
+    });
+
+    // 当文件被扔下 (松手) 时：
+    document.body.addEventListener("drop", async (e) => {
+        e.preventDefault(); // 阻止浏览器默认打开图片的行为
+        document.body.style.backgroundColor = ""; // 恢复原色
+        
+        updateStatus("⚡ 捕获到拖拽对象，正在分析...");
+
+        // 获取拖拽的数据
+        const items = e.dataTransfer.items;
+        let blob = null;
+
+        // 寻找是不是图片
+        for (const item of items) {
+            if (item.type.indexOf("image") === 0) {
+                blob = item.getAsFile();
+                break;
+            }
+        }
+
+        if (blob) {
+            // 如果是图片，直接复用我们的核心处理逻辑
+            await processBlobToClipboard(blob);
+        } else {
+            updateStatus("❌ 拖进来的不是图片！\n请拖拽 PPT 里的图片或截图文件。");
+        }
+    });
 });
 
-async function handlePaste(event) {
-    // 阻止默认粘贴行为（防止它试图把图贴到文字里）
-    event.preventDefault();
-    
-    updateStatus("⚡ 检测到粘贴！正在处理...");
+// ==========================================
+// 核心逻辑区域
+// ==========================================
 
-    // 1. 从粘贴事件中获取数据
+// 处理粘贴事件
+async function handlePaste(event) {
+    event.preventDefault();
     const items = (event.clipboardData || event.originalEvent.clipboardData).items;
     let blob = null;
 
-    // 2. 寻找图片
     for (const item of items) {
         if (item.type.indexOf("image") === 0) {
             blob = item.getAsFile();
@@ -37,38 +78,41 @@ async function handlePaste(event) {
         }
     }
 
-    if (!blob) {
-        updateStatus("❌ 你粘贴的不是图片！\n请先在 PPT 里选中图片复制。");
-        return;
+    if (blob) {
+        await processBlobToClipboard(blob);
+    } else {
+        updateStatus("❌ 粘贴板里没有图片！");
     }
+}
 
+// 统一处理函数：拿到图片文件(Blob) -> 反色 -> 塞回剪贴板
+async function processBlobToClipboard(blob) {
     try {
-        // 3. 将 Blob 转为 Base64
-        const base64 = await blobToBase64(blob);
-        
         updateStatus("🎨 正在进行反色计算...");
 
-        // 4. 反色处理
+        // 1. 转 Base64
+        const base64 = await blobToBase64(blob);
+        
+        // 2. 反色
         const newBase64 = await invertImagePromise(base64);
 
-        // 5. 将结果写回剪贴板
-        // 注意：写入剪贴板通常比读取要宽松，但为了保险，我们需要一个 Blob
+        // 3. 塞回剪贴板
         const newBlob = await base64ToBlob(newBase64);
-        
         await navigator.clipboard.write([
             new ClipboardItem({ [blob.type]: newBlob })
         ]);
 
-        updateStatus("✅ 成功！新图已复制。\n请回到 PPT 按 Ctrl+V");
+        // 4. 成功提示
+        updateStatus("✅ 成功！新图已放入剪贴板。\n请回到 PPT 按 Ctrl+V");
         
-        // 视觉反馈：让按钮变绿一下
+        // 按钮变绿反馈
         const btn = document.getElementById("runBtn");
         if(btn) {
-            const oldText = btn.innerText;
             btn.style.backgroundColor = "#107c10";
+            const oldText = btn.innerText;
             btn.innerText = "完成！请粘贴";
             setTimeout(() => {
-                btn.style.backgroundColor = ""; // 恢复颜色
+                btn.style.backgroundColor = "";
                 btn.innerText = oldText;
             }, 3000);
         }
@@ -79,7 +123,8 @@ async function handlePaste(event) {
     }
 }
 
-// --- 辅助函数：Blob 转 Base64 ---
+// --- 辅助工具函数 (不需要动) ---
+
 function blobToBase64(blob) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -89,13 +134,11 @@ function blobToBase64(blob) {
     });
 }
 
-// --- 辅助函数：Base64 转 Blob ---
 async function base64ToBlob(base64) {
     const res = await fetch(base64);
     return await res.blob();
 }
 
-// --- 核心算法：反色 ---
 function invertImagePromise(base64Str) {
     return new Promise((resolve, reject) => {
         const img = new Image();
@@ -107,7 +150,6 @@ function invertImagePromise(base64Str) {
             ctx.drawImage(img, 0, 0);
             const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
             const data = imageData.data;
-            // RGB 反色
             for (let i = 0; i < data.length; i += 4) {
                 data[i] = 255 - data[i];
                 data[i + 1] = 255 - data[i + 1];
